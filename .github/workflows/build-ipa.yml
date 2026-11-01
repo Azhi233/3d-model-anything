@@ -1,0 +1,71 @@
+name: Build unsigned iOS IPA
+
+# 在没有 Mac 的机器上，用 GitHub 的 macOS runner 把 apps/house-capture 编译成
+# 未签名的 IPA，下载后在本机用 zsign / Sideloadly 重签再装。
+# 触发：仓库 Actions 页面点 "Run workflow"，或 gh workflow run build-ipa.yml
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ipa:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain info
+        run: xcodebuild -version && xcode-select -p
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: apps/house-capture
+        run: |
+          xcodegen generate
+          ls -d HouseCapture.xcodeproj
+
+      - name: Build (no signing)
+        working-directory: apps/house-capture
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project HouseCapture.xcodeproj \
+            -scheme HouseCapture \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            build | tee build.log
+          test -d build/Build/Products/Release-iphoneos/HouseCapture.app
+
+      - name: Package IPA
+        run: |
+          rm -rf Payload unsigned.ipa
+          mkdir -p Payload
+          cp -R apps/house-capture/build/Build/Products/Release-iphoneos/HouseCapture.app Payload/
+          # 去掉可能残留的 _CodeSignature，重签时 zsign 会重新生成
+          rm -rf Payload/HouseCapture.app/_CodeSignature Payload/HouseCapture.app/embedded.mobileprovision
+          zip -qry 3d-model-anything-unsigned.ipa Payload
+          ls -lh 3d-model-anything-unsigned.ipa payload 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 3d-model-anything-unsigned-ipa
+          path: 3d-model-anything-unsigned.ipa
+          retention-days: 14
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-log
+          path: apps/house-capture/build.log
+          retention-days: 7
